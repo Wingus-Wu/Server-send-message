@@ -2,7 +2,13 @@ from flask import Flask, request, jsonify, render_template_string
 from datetime import datetime
 
 app = Flask(__name__)
+
+# Messages storage
 messages = []
+
+# Track connected users
+connected_users = {}
+next_anon_id = 1
 
 # ================= Website HTML =================
 HTML_PAGE = """
@@ -14,7 +20,7 @@ HTML_PAGE = """
 <body>
     <h1>Roblox Chat</h1>
     <div id="chat" style="height:300px; overflow-y:scroll; border:1px solid black;"></div>
-    <input type="text" id="msg" placeholder="Type a message"/>
+    <input type="text" id="msg" placeholder="Type message"/>
     <button onclick="sendMessage()">Send</button>
 
     <script>
@@ -28,6 +34,8 @@ HTML_PAGE = """
             data.forEach(msg => {
                 const el = document.createElement("p")
                 el.textContent = msg.username + ": " + msg.message
+                if(msg.system && msg.color === "green") el.style.color = "green"
+                else if(msg.system && msg.color === "red") el.style.color = "red"
                 chatDiv.appendChild(el)
             })
             chatDiv.scrollTop = chatDiv.scrollHeight
@@ -56,17 +64,61 @@ HTML_PAGE = """
 def home():
     return render_template_string(HTML_PAGE)
 
+# ================= Send message / connect / disconnect =================
 @app.route("/send", methods=["POST"])
 def send():
-    try:
-        data = request.get_json()
-        username = data.get("username", "Unknown")
-        message = data.get("message", "")
-        entry = {"username": username, "message": message, "time": datetime.utcnow().isoformat()}
-        messages.append(entry)
+    global next_anon_id
+    data = request.get_json()
+    username = data.get("username", "Unknown")
+    message = data.get("message", "")
+
+    # Handle connect / disconnect messages from Roblox
+    if message.startswith("__connect__"):
+        anon = data.get("anonymous", False)
+        if anon:
+            anon_name = f"Anonymous{next_anon_id}"
+            next_anon_id += 1
+            connected_users[username] = anon_name
+            messages.append({
+                "username": "System",
+                "message": f"{anon_name} has connected to chat!",
+                "time": datetime.utcnow().isoformat(),
+                "system": True,
+                "color": "green"
+            })
+        else:
+            connected_users[username] = username
+            messages.append({
+                "username": "System",
+                "message": f"{username} has connected to chat!",
+                "time": datetime.utcnow().isoformat(),
+                "system": True,
+                "color": "green"
+            })
         return jsonify({"success": True})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 400
+
+    elif message.startswith("__disconnect__"):
+        if username in connected_users:
+            name = connected_users[username]
+            messages.append({
+                "username": "System",
+                "message": f"{name} has disconnected from chat.",
+                "time": datetime.utcnow().isoformat(),
+                "system": True,
+                "color": "red"
+            })
+            connected_users.pop(username, None)
+        return jsonify({"success": True})
+
+    # Regular chat messages
+    name_to_send = connected_users.get(username, username)
+    messages.append({
+        "username": name_to_send,
+        "message": message,
+        "time": datetime.utcnow().isoformat(),
+        "system": False
+    })
+    return jsonify({"success": True})
 
 @app.route("/get", methods=["GET"])
 def get_messages():
